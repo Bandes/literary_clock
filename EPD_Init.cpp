@@ -174,6 +174,8 @@ void EPD_Clear(void)
   Width  = (EPD_W % 8 == 0) ? (EPD_W / 8) : (EPD_W / 8 + 1);
   Height = EPD_H;
 
+  EPD_Init();
+
   EPD_WR_REG(0x24);
   for (j = 0; j < Height; j++)
     for (i = 0; i < Width; i++)
@@ -183,6 +185,23 @@ void EPD_Clear(void)
   for (j = 0; j < Height; j++)
     for (i = 0; i < Width; i++)
       EPD_WR_DATA8(0xFF);
+
+  EPD_Update();
+}
+
+void EPD_WriteWhiteToOldFrame(void)
+{
+  uint16_t i, j, Width, Height;
+  Width  = (EPD_W % 8 == 0) ? (EPD_W / 8) : (EPD_W / 8 + 1);
+  Height = EPD_H;
+
+  EPD_SetCursor(0, 0);
+  EPD_WR_REG(0x26);
+  for (j = 0; j < Height; j++)
+    for (i = 0; i < Width; i++)
+      EPD_WR_DATA8(0xFF);
+
+  EPD_SetCursor(0, 0);  // reset cursor for subsequent 0x24 write
 }
 
 void EPD_Clear_R26H(const uint8_t *Image)
@@ -223,7 +242,7 @@ void EPD_Display(const uint8_t *Image)
   Width  = (EPD_W % 8 == 0) ? (EPD_W / 8) : (EPD_W / 8 + 1);
   Height = EPD_H;
 
-  EPD_SetCursor(0, 0);  // reset RAM address counter
+  EPD_SetCursor(0, 0);
   EPD_WR_REG(0x24);
   for (j = 0; j < Height; j++)
     for (i = 0; i < Width; i++)

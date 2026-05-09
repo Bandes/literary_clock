@@ -66,6 +66,7 @@ void   renderDisplay(const String& quote, const String& author,
 void   showMessage(const char* line1, const char* line2 = nullptr);
 String detectTimezone();
 String buildPOSIXtz(const String& ianaZone, long offsetSec);
+void   sanitizeASCII(String& s);
 
 // =============================================================================
 // SETUP
@@ -101,11 +102,10 @@ void setup() {
   Serial.println("EPD init...");
   EPD_GPIOInit();
   EPD_Init();
+  // Seed old-frame register (0x26) with white — no refresh yet
+  EPD_WriteWhiteToOldFrame();
   Paint_NewImage(ImageBW, EPD_W, EPD_H, 0, WHITE);
   Paint_Clear(WHITE);
-  EPD_Clear_R26H(ImageBW);  // seed old-frame register with white
-  EPD_Display(ImageBW);     // write white to current-frame register
-  EPD_Update();             // one full refresh → clean white screen
   Serial.println("EPD ready");
 
   // NTP sync
@@ -155,6 +155,8 @@ void setup() {
   Serial.println("LittleFS OK");
 
   String raw = getQuote(t.tm_hour, t.tm_min);
+  // Sanitize any remaining non-ASCII (e.g. smart quotes surviving LittleFS)
+  sanitizeASCII(raw);
   String quote, author, book;
   parseLine(raw, quote, author, book);
   Serial.printf("Raw:    %s\n", raw.c_str());
@@ -353,6 +355,34 @@ String getQuote(int hour, int minute) {
   }
   file.close();
   return "All we have to decide is what to do with the time given us.|Tolkien|Fellowship of the Ring";
+}
+
+// =============================================================================
+// SANITIZE — replace common UTF-8 sequences with ASCII at runtime
+// =============================================================================
+void sanitizeASCII(String& s) {
+  // Smart quotes
+  s.replace("\xE2\x80\x98", "'");   // left single quote
+  s.replace("\xE2\x80\x99", "'");   // right single quote / apostrophe
+  s.replace("\xE2\x80\x9C", "\"");  // left double quote
+  s.replace("\xE2\x80\x9D", "\"");  // right double quote
+  // Dashes
+  s.replace("\xE2\x80\x93", "-");   // en dash
+  s.replace("\xE2\x80\x94", "--");  // em dash
+  s.replace("\xE2\x80\x91", "-");   // non-breaking hyphen
+  // Ellipsis
+  s.replace("\xE2\x80\xA6", "...");
+  // Non-breaking space
+  s.replace("\xC2\xA0", " ");
+  // Strip any remaining non-ASCII bytes
+  String clean;
+  clean.reserve(s.length());
+  for (unsigned int i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if ((uint8_t)c >= 0x80) continue;  // skip non-ASCII bytes
+    clean += c;
+  }
+  s = clean;
 }
 
 // =============================================================================

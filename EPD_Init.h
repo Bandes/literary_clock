@@ -33,6 +33,7 @@ void EPD_Init_Fast(uint8_t mode);
 void EPD_Init_Part(void);
 
 void EPD_Clear(void);
+void EPD_WriteWhiteToOldFrame(void);
 void EPD_Clear_R26A6H(void);
 void EPD_Clear_R26H(const uint8_t *Image);
 

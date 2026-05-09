@@ -146,6 +146,7 @@ void EPD_DrawCircle(uint16_t X_Center, uint16_t Y_Center, uint16_t Radius,
 
 void EPD_ShowChar(uint16_t x, uint16_t y, uint16_t chr, uint16_t size1, uint16_t color)
 {
+  if (chr < ' ' || chr > '~') return;  // skip non-printable ASCII
   uint16_t i, m, temp, chr1;
   uint16_t x0 = x;
   uint16_t width = size1 / 2;
@@ -163,7 +164,6 @@ void EPD_ShowChar(uint16_t x, uint16_t y, uint16_t chr, uint16_t size1, uint16_t
 
     for (m = 0; m < 8; m++) {
       if (temp & 0x01) Paint_SetPixel(x, y, color);
-      else             Paint_SetPixel(x, y, !color);
       temp >>= 1;
       x++;
       if ((x - x0) == width) {
