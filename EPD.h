@@ -1,20 +1,40 @@
-#ifndef _EPD_H_
-#define _EPD_H_
+#ifndef _EPD_GUI_H_
+#define _EPD_GUI_H_
 
 #include "EPD_Init.h"
 
-/* 函数说明 */
-void EPD_DrawPoint(uint16_t x, uint16_t y, uint8_t color);
-void EPD_DrawLine(uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye, uint8_t color);                              // 划线函数
-void EPD_DrawRectangle(uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye, uint8_t color);                         // 绘制空心矩形
-void Draw_Circle(int xc, int yc, int x, int y, uint8_t color);                                                     // 8分法画圆内部调用
-void EPD_DrawCircle(uint16_t xc, uint16_t yc, uint16_t r, uint8_t color, uint16_t mode);                           // 绘制圆形
-void EPD_DrawTriangel(uint16_t x, uint16_t y, uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye, uint8_t color);  // 绘制空心三角形
-void EPD_ShowChar(uint16_t x, uint16_t y, uint8_t num, uint8_t color, uint8_t sizey);                              // 显示字符函数
-void EPD_ShowString(uint16_t x, uint16_t y, const char *s, uint8_t color, uint16_t sizey);                         // 显示字符串
-uint32_t mypow(uint8_t m, uint8_t n);                                                                              // 幂运算内部调用
-void EPD_ShowNum(uint16_t x, uint16_t y, uint32_t num, uint8_t len, uint8_t color, uint8_t sizey);                 // 显示数字
-void EPD_ShowFloatNum(uint16_t x, uint16_t y, float num, uint8_t pre, uint8_t len, uint8_t color, uint8_t sizey);  // 显示浮点数
-void EPD_ShowPicture(uint16_t x, uint16_t y, uint16_t width, uint16_t height, const uint8_t pic[], uint8_t color); // 图片显示
-void EPD_ShowWatch(uint16_t x, uint16_t y, float num, uint8_t pre, uint8_t len, uint8_t color, uint8_t sizey);     // 显示秒表
+typedef struct {
+  uint8_t  *Image;
+  uint16_t  width;
+  uint16_t  height;
+  uint16_t  widthMemory;
+  uint16_t  heightMemory;
+  uint16_t  color;
+  uint16_t  rotate;
+  uint16_t  widthByte;
+  uint16_t  heightByte;
+} PAINT;
+
+extern PAINT Paint;
+
+#define ROTATE_0   0
+#define ROTATE_90  90
+#define ROTATE_180 180
+#define ROTATE_270 270
+
+void Paint_NewImage(uint8_t *image, uint16_t Width, uint16_t Height, uint16_t Rotate, uint16_t Color);
+void Paint_SetPixel(uint16_t Xpoint, uint16_t Ypoint, uint16_t Color);
+void Paint_Clear(uint8_t Color);
+
+void EPD_ClearWindows(uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye, uint16_t color);
+void EPD_DrawLine(uint16_t Xstart, uint16_t Ystart, uint16_t Xend, uint16_t Yend, uint16_t Color);
+void EPD_DrawRectangle(uint16_t Xstart, uint16_t Ystart, uint16_t Xend, uint16_t Yend, uint16_t Color, uint8_t mode);
+void EPD_DrawCircle(uint16_t X_Center, uint16_t Y_Center, uint16_t Radius, uint16_t Color, uint8_t mode);
+void EPD_ShowChar(uint16_t x, uint16_t y, uint16_t chr, uint16_t size1, uint16_t color);
+void EPD_ShowString(uint16_t x, uint16_t y, const char *chr, uint16_t size1, uint16_t color);
+void EPD_ShowNum(uint16_t x, uint16_t y, uint32_t num, uint16_t len, uint16_t size1, uint16_t color);
+void EPD_ShowPicture(uint16_t x, uint16_t y, uint16_t sizex, uint16_t sizey, const uint8_t BMP[], uint16_t Color);
+void EPD_ShowFloatNum1(uint16_t x, uint16_t y, float num, uint8_t len, uint8_t pre, uint8_t sizey, uint8_t color);
+void EPD_ShowWatch(uint16_t x, uint16_t y, float num, uint8_t len, uint8_t pre, uint8_t sizey, uint8_t color);
+
 #endif

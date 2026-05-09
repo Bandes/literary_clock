@@ -1,5 +1,5 @@
 // =============================================================================
-// Literary Clock — Elecrow CrowPanel 2.13" ESP32-S3
+// Literary Clock — Elecrow CrowPanel 4.2" ESP32-S3
 // Uses Elecrow's native EPD driver files (copy into sketch folder):
 //   EPD.cpp, EPD.h, EPD_Init.cpp, EPD_Init.h, EPDfont.h, spi.cpp, spi.h
 // =============================================================================
@@ -9,7 +9,7 @@
 
 #include <Arduino.h>
 #include "EPD.h"
-extern uint8_t ImageBW[ALLSCREEN_BYTES];
+uint8_t ImageBW[EPD_W * EPD_H / 8];  // 400x300/8 = 15000 bytes
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <HTTPClient.h>
@@ -33,14 +33,14 @@ const char* NTP_SERVER = "pool.ntp.org";
 // =============================================================================
 // DISPLAY LAYOUT
 // =============================================================================
-#define DISPLAY_W  250
-#define DISPLAY_H  122
-#define MARGIN_X   4
+#define DISPLAY_W  400
+#define DISPLAY_H  300
+#define MARGIN_X   8
 
-#define FONT_SZ       12
+#define FONT_SZ       24
 #define CHAR_W        (FONT_SZ / 2)
-#define CHARS_PER_ROW ((DISPLAY_W - MARGIN_X * 2) / CHAR_W)
-#define LINE_H        14
+#define CHARS_PER_ROW ((DISPLAY_W - MARGIN_X * 2) / CHAR_W)  // 32
+#define LINE_H        26
 
 // =============================================================================
 // RTC MEMORY — persists through deep sleep
@@ -69,8 +69,8 @@ String buildPOSIXtz(const String& ianaZone, long offsetSec);
 // SETUP
 // =============================================================================
 void setup() {
-  delay(3000);
   Serial.begin(115200);
+  delay(3000);
   Serial.println("\n=== WAKE ===");
 
   // Timezone MUST be set on every boot — does not survive deep sleep
@@ -97,10 +97,13 @@ void setup() {
 
   // Always do full EPD init
   Serial.println("EPD init...");
+  EPD_GPIOInit();
   EPD_Init();
-  EPD_ALL_Fill(WHITE);
-  EPD_Update();
-  EPD_Clear_R26H();
+  Paint_NewImage(ImageBW, EPD_W, EPD_H, 0, WHITE);
+  Paint_Clear(WHITE);
+  EPD_Clear_R26H(ImageBW);  // seed old-frame register with white
+  EPD_Display(ImageBW);     // write white to current-frame register
+  EPD_Update();             // one full refresh → clean white screen
   Serial.println("EPD ready");
 
   // NTP sync
@@ -120,7 +123,7 @@ void setup() {
   if (!getTime(&t)) {
     Serial.println("ERROR: no valid time");
     showMessage("No time sync.", "Check WiFi.");
-    EPD_DisplayImage(ImageBW);
+    EPD_Display(ImageBW);
     EPD_Update();
     EPD_Sleep();
     deepSleepUntilNextMinute(0);
@@ -142,7 +145,7 @@ void setup() {
   if (!LittleFS.begin(false)) {
     Serial.println("ERROR: LittleFS failed");
     showMessage("Storage error.", "Re-upload data.");
-    EPD_DisplayImage(ImageBW);
+    EPD_Display(ImageBW);
     EPD_Update();
     EPD_Sleep();
     deepSleepUntilNextMinute(t.tm_sec);
@@ -152,11 +155,16 @@ void setup() {
   String raw = getQuote(t.tm_hour, t.tm_min);
   String quote, author, book;
   parseLine(raw, quote, author, book);
-  Serial.printf("Quote: %s\n", quote.c_str());
+  Serial.printf("Raw:    %s\n", raw.c_str());
+  Serial.printf("Quote:  %s\n", quote.c_str());
+  Serial.printf("Author: %s\n", author.c_str());
+  Serial.printf("Book:   %s\n", book.c_str());
 
   // Render and push to display
+  Serial.println("Rendering...");
   renderDisplay(quote, author, book, t.tm_hour, t.tm_min);
-  EPD_DisplayImage(ImageBW);
+  Serial.println("Pushing to display...");
+  EPD_Display(ImageBW);
   EPD_Update();
   EPD_Sleep();
   Serial.println("Display updated");
@@ -391,13 +399,13 @@ void wordWrap(const String& text, std::vector<String>& lines) {
 // =============================================================================
 void renderDisplay(const String& quote, const String& author,
                    const String& book, int hour, int minute) {
-  EPD_ALL_Fill(WHITE);
+  Paint_Clear(WHITE);
 
   // Time — top right
   char timeBuf[6];
   snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", hour, minute);
   int timeX = DISPLAY_W - (strlen(timeBuf) * CHAR_W) - MARGIN_X;
-  EPD_ShowString(timeX, MARGIN_X, timeBuf, BLACK, FONT_SZ);
+  EPD_ShowString(timeX, MARGIN_X, timeBuf, FONT_SZ, BLACK);
 
   // Quote — below time
   std::vector<String> qLines;
@@ -405,7 +413,7 @@ void renderDisplay(const String& quote, const String& author,
   int y = MARGIN_X + LINE_H + 2;
   for (const auto& ln : qLines) {
     if (y + FONT_SZ > DISPLAY_H - LINE_H - 2) break;
-    EPD_ShowString(MARGIN_X, y, ln.c_str(), BLACK, FONT_SZ);
+    EPD_ShowString(MARGIN_X, y, ln.c_str(), FONT_SZ, BLACK);
     y += LINE_H;
   }
 
@@ -422,7 +430,7 @@ void renderDisplay(const String& quote, const String& author,
     if ((int)attr.length() > CHARS_PER_ROW)
       attr = attr.substring(0, CHARS_PER_ROW - 1);
     EPD_ShowString(MARGIN_X, DISPLAY_H - FONT_SZ - 2,
-                   attr.c_str(), BLACK, FONT_SZ);
+                   attr.c_str(), FONT_SZ, BLACK);
   }
 }
 
@@ -430,7 +438,7 @@ void renderDisplay(const String& quote, const String& author,
 // ERROR SCREEN
 // =============================================================================
 void showMessage(const char* line1, const char* line2) {
-  EPD_ALL_Fill(WHITE);
-  EPD_ShowString(MARGIN_X, 20, line1, BLACK, FONT_SZ);
-  if (line2) EPD_ShowString(MARGIN_X, 20 + LINE_H + 2, line2, BLACK, FONT_SZ);
+  Paint_Clear(WHITE);
+  EPD_ShowString(MARGIN_X, 20, line1, FONT_SZ, BLACK);
+  if (line2) EPD_ShowString(MARGIN_X, 20 + LINE_H + 2, line2, FONT_SZ, BLACK);
 }

@@ -3,32 +3,37 @@
 
 #include "spi.h"
 
-/* 定义墨水屏显示方向 */
-#define USE_HORIZONTIAL 2 /* 0 1 2 3 */
-#if USE_HORIZONTIAL == 0 | USE_HORIZONTIAL == 2
-#define EPD_W 250
-#define EPD_H 122
-#define ALLSCREEN_BYTES ((EPD_H % 8) ? (EPD_H / 8 + 1) : (EPD_H / 8)) * EPD_W
-#else
-#define EPD_W 122
-#define EPD_H 250
-#define ALLSCREEN_BYTES ((EPD_W % 8) ? (EPD_W / 8 + 1) : (EPD_W / 8)) * EPD_H
-#endif
-/* 定义颜色参数 */
-/* R24H:黑色像素写0 白色像素写1 */
-#define WHITE 0xFF
-#define BLACK 0x00
+// CrowPanel 4.2" ESP32-S3 — SSD1680 driver, 400x300 resolution
+#define EPD_W  400
+#define EPD_H  300
 
-/* 函数说明 */
-void EPD_READBUSY(void);
-void EPD_HW_SW_RESET(void);
+#define WHITE  0xFF
+#define BLACK  0x00
+
+#define Fast_Seconds_1_5s  0
+#define Fast_Seconds_1_s   1
+
+void EPD_ReadBusy(void);
+void EPD_RESET(void);
 void EPD_Sleep(void);
+
 void EPD_Update(void);
 void EPD_Update_Fast(void);
-void EPD_PartUpdate(void);
-void EPD_Clear_R26H(void);
-void EPD_ALL_Fill(uint8_t color);
-void EPD_DisplayImage(const uint8_t *ImageBW);
+void EPD_Update_Part(void);
+
+void EPD_Address_Set(uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye);
+void EPD_SetCursor(uint16_t xs, uint16_t ys);
+
+void EPD_Display(const uint8_t *Image);
+void EPD_Display_Fast(const uint8_t *Image);
+void EPD_Display_Part(uint16_t x, uint16_t y, uint16_t sizex, uint16_t sizey, const uint8_t *Image);
+
 void EPD_Init(void);
-void EPD_HW_Init_Fast(void);
+void EPD_Init_Fast(uint8_t mode);
+void EPD_Init_Part(void);
+
+void EPD_Clear(void);
+void EPD_Clear_R26A6H(void);
+void EPD_Clear_R26H(const uint8_t *Image);
+
 #endif

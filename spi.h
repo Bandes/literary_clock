@@ -3,13 +3,13 @@
 
 #include <Arduino.h>
 
-//项目板子
+//项目板子 — CrowPanel 4.2" ESP32-S3
 #define SCK 12
 #define MOSI 11
-#define RES 10
-#define DC 13
-#define CS 14
-#define BUSY 9
+#define RES 47
+#define DC 46
+#define CS 45
+#define BUSY 48
 
 /* 定义端口电平状态 */
 #define EPD_SCK_Clr() digitalWrite(SCK, LOW)
