@@ -37,10 +37,11 @@ const char* NTP_SERVER = "pool.ntp.org";
 #define DISPLAY_H  300
 #define MARGIN_X   8
 
-#define FONT_SZ       24
-#define CHAR_W        (FONT_SZ / 2)
-#define CHARS_PER_ROW ((DISPLAY_W - MARGIN_X * 2) / CHAR_W)  // 32
-#define LINE_H        26
+#define ATTR_FONT     16
+#define ATTR_CHAR_W   (ATTR_FONT / 2)
+#define ATTR_LINE_H   18
+#define TIME_FONT     24
+#define TIME_CHAR_W   (TIME_FONT / 2)
 
 // =============================================================================
 // RTC MEMORY — persists through deep sleep
@@ -58,7 +59,8 @@ bool   getTime(struct tm* t);
 void   deepSleepUntilNextMinute(int currentSec);
 String getQuote(int hour, int minute);
 void   parseLine(const String& raw, String& quote, String& author, String& book);
-void   wordWrap(const String& text, std::vector<String>& lines);
+void   wordWrap(const String& text, std::vector<String>& lines, int charsPerRow);
+int    countWrappedLines(const String& text, int charsPerRow);
 void   renderDisplay(const String& quote, const String& author,
                      const String& book, int hour, int minute);
 void   showMessage(const char* line1, const char* line2 = nullptr);
@@ -377,47 +379,87 @@ void parseLine(const String& raw, String& quote, String& author, String& book) {
 // =============================================================================
 // WORD WRAP
 // =============================================================================
-void wordWrap(const String& text, std::vector<String>& lines) {
+void wordWrap(const String& text, std::vector<String>& lines, int charsPerRow) {
   String rem = text;
   rem.trim();
   while (rem.length() > 0) {
-    if ((int)rem.length() <= CHARS_PER_ROW) {
+    if ((int)rem.length() <= charsPerRow) {
       lines.push_back(rem);
       break;
     }
-    int brk = CHARS_PER_ROW;
+    int brk = charsPerRow;
     while (brk > 0 && rem[brk] != ' ') brk--;
-    if (brk == 0) brk = CHARS_PER_ROW;
+    if (brk == 0) brk = charsPerRow;
     lines.push_back(rem.substring(0, brk));
     rem = rem.substring(brk);
     rem.trim();
   }
 }
 
+int countWrappedLines(const String& text, int charsPerRow) {
+  std::vector<String> lines;
+  wordWrap(text, lines, charsPerRow);
+  return lines.size();
+}
+
 // =============================================================================
 // RENDER
 // =============================================================================
+
+// Available font sizes (largest first for scaling)
+static const int fontSizes[] = {48, 32, 24, 16, 12};
+static const int numFontSizes = 5;
+
 void renderDisplay(const String& quote, const String& author,
                    const String& book, int hour, int minute) {
   Paint_Clear(WHITE);
 
-  // Time — top right
-  char timeBuf[6];
-  snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", hour, minute);
-  int timeX = DISPLAY_W - (strlen(timeBuf) * CHAR_W) - MARGIN_X;
-  EPD_ShowString(timeX, MARGIN_X, timeBuf, FONT_SZ, BLACK);
+  // Reserve space: time row at top, attribution at bottom
+  int timeRowH = TIME_FONT + 4;
+  int attrRowH = ATTR_FONT + 4;
+  int quoteAreaH = DISPLAY_H - timeRowH - attrRowH - MARGIN_X;
 
-  // Quote — below time
-  std::vector<String> qLines;
-  wordWrap(quote, qLines);
-  int y = MARGIN_X + LINE_H + 2;
-  for (const auto& ln : qLines) {
-    if (y + FONT_SZ > DISPLAY_H - LINE_H - 2) break;
-    EPD_ShowString(MARGIN_X, y, ln.c_str(), FONT_SZ, BLACK);
-    y += LINE_H;
+  // Pick largest font where quote fits in available area
+  int fontSz = fontSizes[numFontSizes - 1];  // smallest as fallback
+  for (int i = 0; i < numFontSizes; i++) {
+    int sz = fontSizes[i];
+    int charW = sz / 2;
+    int charsPerRow = (DISPLAY_W - MARGIN_X * 2) / charW;
+    int lineH = sz + 2;
+    int nLines = countWrappedLines(quote, charsPerRow);
+    if (nLines * lineH <= quoteAreaH) {
+      fontSz = sz;
+      break;
+    }
   }
 
-  // Attribution — bottom
+  int charW = fontSz / 2;
+  int charsPerRow = (DISPLAY_W - MARGIN_X * 2) / charW;
+  int lineH = fontSz + 2;
+
+  Serial.printf("Font: %d, chars/row: %d\n", fontSz, charsPerRow);
+
+  // Time — top right (always TIME_FONT)
+  char timeBuf[6];
+  snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", hour, minute);
+  int timeX = DISPLAY_W - (strlen(timeBuf) * TIME_CHAR_W) - MARGIN_X;
+  EPD_ShowString(timeX, MARGIN_X, timeBuf, TIME_FONT, BLACK);
+
+  // Quote — below time, vertically centered in available area
+  std::vector<String> qLines;
+  wordWrap(quote, qLines, charsPerRow);
+  int totalTextH = qLines.size() * lineH;
+  int quoteY0 = timeRowH + (quoteAreaH - totalTextH) / 2;
+  if (quoteY0 < timeRowH) quoteY0 = timeRowH;
+
+  int y = quoteY0;
+  for (const auto& ln : qLines) {
+    if (y + fontSz > DISPLAY_H - attrRowH) break;
+    EPD_ShowString(MARGIN_X, y, ln.c_str(), fontSz, BLACK);
+    y += lineH;
+  }
+
+  // Attribution — bottom (always ATTR_FONT)
   String attr = "";
   if (author.length() > 0 && book.length() > 0)
     attr = "- " + author + ", " + book;
@@ -427,10 +469,11 @@ void renderDisplay(const String& quote, const String& author,
     attr = book;
 
   if (attr.length() > 0) {
-    if ((int)attr.length() > CHARS_PER_ROW)
-      attr = attr.substring(0, CHARS_PER_ROW - 1);
-    EPD_ShowString(MARGIN_X, DISPLAY_H - FONT_SZ - 2,
-                   attr.c_str(), FONT_SZ, BLACK);
+    int attrChars = (DISPLAY_W - MARGIN_X * 2) / ATTR_CHAR_W;
+    if ((int)attr.length() > attrChars)
+      attr = attr.substring(0, attrChars - 1);
+    EPD_ShowString(MARGIN_X, DISPLAY_H - ATTR_FONT - 2,
+                   attr.c_str(), ATTR_FONT, BLACK);
   }
 }
 
@@ -439,6 +482,6 @@ void renderDisplay(const String& quote, const String& author,
 // =============================================================================
 void showMessage(const char* line1, const char* line2) {
   Paint_Clear(WHITE);
-  EPD_ShowString(MARGIN_X, 20, line1, FONT_SZ, BLACK);
-  if (line2) EPD_ShowString(MARGIN_X, 20 + LINE_H + 2, line2, FONT_SZ, BLACK);
+  EPD_ShowString(MARGIN_X, 20, line1, 24, BLACK);
+  if (line2) EPD_ShowString(MARGIN_X, 48, line2, 24, BLACK);
 }
