@@ -1,13 +1,12 @@
 // =============================================================================
 // Literary Clock — Elecrow CrowPanel 4.2" ESP32-S3
-// Uses Elecrow's native EPD driver files (copy into sketch folder):
-//   EPD.cpp, EPD.h, EPD_Init.cpp, EPD_Init.h, EPDfont.h, spi.cpp, spi.h
 // =============================================================================
 // Data file format (LittleFS, /HH.txt, one line per minute):
 //   Quote text|Author|Book Title
 // =============================================================================
 
 #include <Arduino.h>
+#include <SPI.h>
 #include "EPD.h"
 uint8_t ImageBW[EPD_W * EPD_H / 8];  // 400x300/8 = 15000 bytes
 #include <WiFi.h>
@@ -15,6 +14,16 @@ uint8_t ImageBW[EPD_W * EPD_H / 8];  // 400x300/8 = 15000 bytes
 #include <HTTPClient.h>
 #include "time.h"
 #include "LittleFS.h"
+
+#include <Adafruit_GFX.h>
+#include <Fonts/FreeSerif9pt7b.h>
+#include <Fonts/FreeSerif12pt7b.h>
+#include <Fonts/FreeSerif18pt7b.h>
+#include <Fonts/FreeSerif24pt7b.h>
+#include <Fonts/FreeSans9pt7b.h>
+#include "EPDDisplay.h"
+
+EPDDisplay gfx(EPD_W, EPD_H);
 
 // =============================================================================
 // CONFIGURATION
@@ -33,15 +42,9 @@ const char* NTP_SERVER = "pool.ntp.org";
 // =============================================================================
 // DISPLAY LAYOUT
 // =============================================================================
-#define DISPLAY_W  400
-#define DISPLAY_H  300
+#define DISPLAY_W  EPD_W
+#define DISPLAY_H  EPD_H
 #define MARGIN_X   8
-
-#define ATTR_FONT     16
-#define ATTR_CHAR_W   (ATTR_FONT / 2)
-#define ATTR_LINE_H   18
-#define TIME_FONT     24
-#define TIME_CHAR_W   (TIME_FONT / 2)
 
 // =============================================================================
 // RTC MEMORY — persists through deep sleep
@@ -59,8 +62,8 @@ bool   getTime(struct tm* t);
 void   deepSleepUntilNextMinute(int currentSec);
 String getQuote(int hour, int minute);
 void   parseLine(const String& raw, String& quote, String& author, String& book);
-void   wordWrap(const String& text, std::vector<String>& lines, int charsPerRow);
-int    countWrappedLines(const String& text, int charsPerRow);
+void   wordWrapPixel(const GFXfont* font, const String& text, int maxWidth,
+                     std::vector<String>& lines);
 void   renderDisplay(const String& quote, const String& author,
                      const String& book, int hour, int minute);
 void   showMessage(const char* line1, const char* line2 = nullptr);
@@ -407,89 +410,89 @@ void parseLine(const String& raw, String& quote, String& author, String& book) {
 }
 
 // =============================================================================
-// WORD WRAP
+// WORD WRAP (pixel-based for proportional fonts)
 // =============================================================================
-void wordWrap(const String& text, std::vector<String>& lines, int charsPerRow) {
-  String rem = text;
-  rem.trim();
-  while (rem.length() > 0) {
-    if ((int)rem.length() <= charsPerRow) {
-      lines.push_back(rem);
-      break;
-    }
-    int brk = charsPerRow;
-    while (brk > 0 && rem[brk] != ' ') brk--;
-    if (brk == 0) brk = charsPerRow;
-    lines.push_back(rem.substring(0, brk));
-    rem = rem.substring(brk);
-    rem.trim();
+
+// Measure cursor advance width of a string in given font
+int measureTextWidth(const GFXfont* font, const char* text) {
+  int w = 0;
+  while (*text) {
+    uint8_t c = (uint8_t)*text;
+    if (c < font->first || c > font->last) { text++; continue; }
+    GFXglyph* glyph = &font->glyph[c - font->first];
+    w += glyph->xAdvance;
+    text++;
   }
+  return w;
 }
 
-int countWrappedLines(const String& text, int charsPerRow) {
-  std::vector<String> lines;
-  wordWrap(text, lines, charsPerRow);
-  return lines.size();
+void wordWrapPixel(const GFXfont* font, const String& text, int maxWidth,
+                   std::vector<String>& lines) {
+  String rem = text;
+  rem.trim();
+  String currentLine = "";
+
+  while (rem.length() > 0) {
+    int spaceIdx = rem.indexOf(' ');
+    String word;
+    if (spaceIdx < 0) {
+      word = rem;
+      rem = "";
+    } else {
+      word = rem.substring(0, spaceIdx);
+      rem = rem.substring(spaceIdx + 1);
+      rem.trim();
+    }
+
+    String testLine = currentLine.length() > 0 ? currentLine + " " + word : word;
+    int w = measureTextWidth(font, testLine.c_str());
+
+    if (w <= maxWidth || currentLine.length() == 0) {
+      currentLine = testLine;
+    } else {
+      lines.push_back(currentLine);
+      currentLine = word;
+    }
+  }
+  if (currentLine.length() > 0) {
+    lines.push_back(currentLine);
+  }
 }
 
 // =============================================================================
 // RENDER
 // =============================================================================
 
-// Available font sizes (largest first for scaling)
-static const int fontSizes[] = {48, 32, 24, 16, 12};
-static const int numFontSizes = 5;
+// Quote fonts: FreeSerif, largest to smallest
+static const GFXfont* quoteFonts[] = {
+  &FreeSerif24pt7b,
+  &FreeSerif18pt7b,
+  &FreeSerif12pt7b,
+  &FreeSerif9pt7b,
+};
+static const int numQuoteFonts = 4;
 
 void renderDisplay(const String& quote, const String& author,
                    const String& book, int hour, int minute) {
   Paint_Clear(WHITE);
 
-  // Reserve space: time row at top, attribution at bottom
-  int timeRowH = TIME_FONT + 4;
-  int attrRowH = ATTR_FONT + 4;
-  int quoteAreaH = DISPLAY_H - timeRowH - attrRowH - MARGIN_X;
+  int textWidth = DISPLAY_W - MARGIN_X * 2;
 
-  // Pick largest font where quote fits in available area
-  int fontSz = fontSizes[numFontSizes - 1];  // smallest as fallback
-  for (int i = 0; i < numFontSizes; i++) {
-    int sz = fontSizes[i];
-    int charW = sz / 2;
-    int charsPerRow = (DISPLAY_W - MARGIN_X * 2) / charW;
-    int lineH = sz + 2;
-    int nLines = countWrappedLines(quote, charsPerRow);
-    if (nLines * lineH <= quoteAreaH) {
-      fontSz = sz;
-      break;
-    }
-  }
-
-  int charW = fontSz / 2;
-  int charsPerRow = (DISPLAY_W - MARGIN_X * 2) / charW;
-  int lineH = fontSz + 2;
-
-  Serial.printf("Font: %d, chars/row: %d\n", fontSz, charsPerRow);
-
-  // Time — top right (always TIME_FONT)
+  // Time — top right (FreeSans 9pt)
+  const GFXfont* timeFont = &FreeSans9pt7b;
+  gfx.setFont(timeFont);
+  gfx.setTextColor(BLACK);
   char timeBuf[6];
   snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", hour, minute);
-  int timeX = DISPLAY_W - (strlen(timeBuf) * TIME_CHAR_W) - MARGIN_X;
-  EPD_ShowString(timeX, MARGIN_X, timeBuf, TIME_FONT, BLACK);
+  int16_t tx1, ty1;
+  uint16_t tw, th;
+  gfx.getTextBounds(timeBuf, 0, 0, &tx1, &ty1, &tw, &th);
+  int timeLineH = timeFont->yAdvance;
+  gfx.setCursor(DISPLAY_W - tw - MARGIN_X, MARGIN_X + th);
+  gfx.print(timeBuf);
 
-  // Quote — below time, vertically centered in available area
-  std::vector<String> qLines;
-  wordWrap(quote, qLines, charsPerRow);
-  int totalTextH = qLines.size() * lineH;
-  int quoteY0 = timeRowH + (quoteAreaH - totalTextH) / 2;
-  if (quoteY0 < timeRowH) quoteY0 = timeRowH;
-
-  int y = quoteY0;
-  for (const auto& ln : qLines) {
-    if (y + fontSz > DISPLAY_H - attrRowH) break;
-    EPD_ShowString(MARGIN_X, y, ln.c_str(), fontSz, BLACK);
-    y += lineH;
-  }
-
-  // Attribution — bottom (always ATTR_FONT)
+  // Attribution string
+  const GFXfont* attrFont = &FreeSans9pt7b;
   String attr = "";
   if (author.length() > 0 && book.length() > 0)
     attr = "- " + author + ", " + book;
@@ -497,13 +500,75 @@ void renderDisplay(const String& quote, const String& author,
     attr = "- " + author;
   else if (book.length() > 0)
     attr = book;
+  int attrLineH = attrFont->yAdvance;
 
+  // Available area for quote
+  int quoteTop = MARGIN_X + timeLineH + 4;
+  int quoteBot = DISPLAY_H - (attr.length() > 0 ? attrLineH + 6 : MARGIN_X);
+  int quoteAreaH = quoteBot - quoteTop;
+
+  // Pick largest font where quote fits
+  const GFXfont* chosenFont = quoteFonts[numQuoteFonts - 1];
+  std::vector<String> qLines;
+  int lineH = chosenFont->yAdvance;
+
+  Serial.printf("Quote area: top=%d bot=%d h=%d\n", quoteTop, quoteBot, quoteAreaH);
+  for (int i = 0; i < numQuoteFonts; i++) {
+    const GFXfont* f = quoteFonts[i];
+    std::vector<String> testLines;
+    wordWrapPixel(f, quote, textWidth, testLines);
+    int testLineH = f->yAdvance;
+    int totalH = testLines.size() * testLineH;
+    Serial.printf("  Font[%d] yAdv=%d lines=%d totalH=%d %s\n",
+                  i, testLineH, (int)testLines.size(), totalH,
+                  totalH <= quoteAreaH ? "FITS" : "no");
+    if (totalH <= quoteAreaH) {
+      chosenFont = f;
+      qLines = testLines;
+      lineH = testLineH;
+      break;
+    }
+    if (i == numQuoteFonts - 1) {
+      qLines = testLines;
+      lineH = testLineH;
+    }
+  }
+
+  Serial.printf("Chosen font yAdvance: %d, lines: %d\n", lineH, (int)qLines.size());
+
+  // Draw quote — vertically centered in available area
+  int totalTextH = qLines.size() * lineH;
+  // If text overflows even at smallest font, just start at the top
+  int quoteY;
+  if (totalTextH >= quoteAreaH) {
+    quoteY = quoteTop + lineH;
+  } else {
+    quoteY = quoteTop + (quoteAreaH - totalTextH) / 2 + lineH;
+  }
+
+  gfx.setFont(chosenFont);
+  gfx.setTextColor(BLACK);
+  for (const auto& ln : qLines) {
+    if (quoteY > quoteBot) break;  // don't overwrite attribution
+    gfx.setCursor(MARGIN_X, quoteY);
+    gfx.print(ln);
+    quoteY += lineH;
+  }
+
+  // Attribution — bottom
   if (attr.length() > 0) {
-    int attrChars = (DISPLAY_W - MARGIN_X * 2) / ATTR_CHAR_W;
-    if ((int)attr.length() > attrChars)
-      attr = attr.substring(0, attrChars - 1);
-    EPD_ShowString(MARGIN_X, DISPLAY_H - ATTR_FONT - 2,
-                   attr.c_str(), ATTR_FONT, BLACK);
+    gfx.setFont(attrFont);
+    gfx.setTextColor(BLACK);
+    // Truncate if too wide
+    int16_t ax1, ay1;
+    uint16_t aw, ah;
+    gfx.getTextBounds(attr.c_str(), 0, 0, &ax1, &ay1, &aw, &ah);
+    while ((int)aw > textWidth && attr.length() > 3) {
+      attr = attr.substring(0, attr.length() - 1);
+      gfx.getTextBounds(attr.c_str(), 0, 0, &ax1, &ay1, &aw, &ah);
+    }
+    gfx.setCursor(MARGIN_X, DISPLAY_H - MARGIN_X);
+    gfx.print(attr);
   }
 }
 
@@ -512,6 +577,12 @@ void renderDisplay(const String& quote, const String& author,
 // =============================================================================
 void showMessage(const char* line1, const char* line2) {
   Paint_Clear(WHITE);
-  EPD_ShowString(MARGIN_X, 20, line1, 24, BLACK);
-  if (line2) EPD_ShowString(MARGIN_X, 48, line2, 24, BLACK);
+  gfx.setFont(&FreeSans9pt7b);
+  gfx.setTextColor(BLACK);
+  gfx.setCursor(MARGIN_X, 30);
+  gfx.print(line1);
+  if (line2) {
+    gfx.setCursor(MARGIN_X, 55);
+    gfx.print(line2);
+  }
 }

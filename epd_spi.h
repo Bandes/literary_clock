@@ -1,5 +1,5 @@
-#ifndef _SPI_H_
-#define _SPI_H_
+#ifndef _EPD_SPI_H_
+#define _EPD_SPI_H_
 
 #include <Arduino.h>
 

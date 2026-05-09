@@ -1,22 +1,32 @@
 # Literary Clock
 
+
 Display a different literary quote every minute on an e-paper display. Each hour of the day has 60 unique quotes from literature, philosophy, and poetry—a minimalist desk clock that doubles as daily inspiration.
+
+**Now supports the Elecrow CrowPanel 4.2" ESP32-S3 e-paper display (SSD1680, 400×300 px, monochrome, JST-PH 2.0mm LiPo connector).**
+
+
 
 ## Hardware
 
-- **ESP32-S3** microcontroller (e.g., Elecrow CrowPanel 2.13")
-- **2.13" e-paper display** (Elecrow EPD, 250×122 pixels, monochrome)
-- USB-C power (can run continuously or on battery with deep sleep)
+- **Elecrow CrowPanel 4.2" ESP32-S3** (recommended)
+  - 400×300 px e-paper display (SSD1680 controller, monochrome)
+  - JST-PH 2.0mm LiPo battery connector (3.7V, 500–1000mAh recommended)
+  - USB-C for power/programming
+- **ESP32-S3** microcontroller (other variants may work)
+- **E-paper display**: 4.2" (400×300 px, SSD1680) or 2.13" (250×122 px, legacy)
+
+> This project is optimized for the Elecrow CrowPanel 4.2" ESP32-S3. Other SSD1680-based displays may work with minor code changes.
 
 ## Quick Start
 
 ### 1. Prepare Arduino IDE
 - Install ESP32 board support in Arduino IDE
 - Copy these files into your sketch folder:
-  - `EPD.cpp`, `EPD.h` — e-paper driver
-  - `EPD_Init.cpp`, `EPD_Init.h` — display initialization
-  - `EPDfont.h` — monospace font
-  - `spi.cpp`, `spi.h` — SPI communication
+  - `EPD.cpp`, `EPD.h` — e-paper graphics and text rendering
+  - `EPD_Init.cpp`, `EPD_Init.h` — display initialization, SSD1680 driver, 400×300 px
+  - `spi.cpp`, `spi.h` — bit-banged SPI (renamed to avoid Arduino SPI.h collision)
+  - `EPDDisplay.h` — Adafruit GFX wrapper for high-quality proportional fonts
 
 ### 2. Upload Quote Data
 - Copy all files from the `data/` folder to your ESP32 via Arduino IDE's LittleFS uploader
@@ -40,6 +50,9 @@ Hold the BOOT button for 3 seconds at startup to clear saved WiFi credentials an
 3. Looks up the quote for `[hour].txt` at line `[minute]`
 4. Parses quote, author, and book title (pipe-delimited)
 5. Renders text to display: quote (top), time (top-right), attribution (bottom)
+  - Uses Adafruit GFX proportional fonts for crisp, readable text
+  - Dynamically scales font size and wraps text to fit 400×300 px
+  - Attribution line is rendered smaller for clarity
 6. Updates e-paper display (very low power)
 7. Sleeps until next minute
 
@@ -52,6 +65,8 @@ Hold the BOOT button for 3 seconds at startup to clear saved WiFi credentials an
 **Power:**
 - E-paper updates consume power, but deep sleep between updates is extremely efficient
 - Typical daily usage: <15 mA average
+- 3.7V LiPo battery (JST-PH 2.0mm, 500–1000mAh recommended)
+- **Check battery polarity before connecting!**
 
 ## Data Format
 
@@ -96,13 +111,15 @@ Print settings:
 | Wrong timezone | IP geolocation failed. Edit `TZ_STRING` at top of sketch to your POSIX timezone string. |
 | Time drifts | NTP re-syncs every ~1 hour automatically. Check `pool.ntp.org` accessibility. |
 
+
 ## Architecture
 
-- **`literary_clock.ino`** — Main loop: wake → sync time → get quote → render → sleep
-- **`EPD.*`** — Low-level e-paper driver (communication, refresh, sleep)
-- **`EPD_Init.*`** — Hardware initialization for ESP32-S3 GPIO & SPI pins
-- **`spi.*`** — SPI protocol (communicates with e-paper display)
-- **`EPDfont.h`** — Bitmap font (12pt monospace)
+- **`literary_clock.ino`** — Main logic: wake → sync time → get quote → render → sleep
+- **`EPD.*`** — E-paper graphics primitives, text rendering (now uses Adafruit GFX)
+- **`EPD_Init.*`** — SSD1680 e-paper driver, hardware init for ESP32-S3 GPIO & SPI
+- **`spi.*`** — Bit-banged SPI protocol (avoids Arduino SPI.h collision)
+- **`EPDDisplay.h`** — Adafruit GFX wrapper for proportional fonts, word wrap, scaling
+
 
 ## Configuration
 
@@ -120,5 +137,7 @@ Supported POSIX timezones include US, Europe, Asia-Pacific regions. Add custom z
 ## License & Attribution
 
 Quote dataset adapted from [JohannesNE/lit-review](https://github.com/JohannesNE/lit-review).
+
+E-paper driver and hardware initialization adapted for Elecrow CrowPanel 4.2" ESP32-S3 (SSD1680, 400×300 px).
 
 Elecrow EPD driver files included per manufacturer license.

@@ -1,7 +1,7 @@
 #ifndef _EPD_INIT_H_
 #define _EPD_INIT_H_
 
-#include "spi.h"
+#include "epd_spi.h"
 
 // CrowPanel 4.2" ESP32-S3 — SSD1680 driver, 400x300 resolution
 #define EPD_W  400

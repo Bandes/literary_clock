@@ -1,4 +1,4 @@
-#include "spi.h"
+#include "epd_spi.h"
 
 void EPD_GPIOInit(void)
 {
