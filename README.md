@@ -136,7 +136,7 @@ Supported POSIX timezones include US, Europe, Asia-Pacific regions. Add custom z
 
 ## License & Attribution
 
-Quote dataset adapted from [JohannesNE/lit-review](https://github.com/JohannesNE/lit-review).
+Quote dataset adapted from [JohannesNE/literature-clock]([https://github.com/JohannesNE/lit-review](https://github.com/JohannesNE/literature-clock)).
 
 E-paper driver and hardware initialization adapted for Elecrow CrowPanel 4.2" ESP32-S3 (SSD1680, 400×300 px).
 
