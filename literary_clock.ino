@@ -14,6 +14,7 @@ uint8_t ImageBW[EPD_W * EPD_H / 8];  // 400x300/8 = 15000 bytes
 #include <HTTPClient.h>
 #include "time.h"
 #include "LittleFS.h"
+#include <cstring>
 
 #include <Adafruit_GFX.h>
 #include <Fonts/FreeSerif9pt7b.h>
@@ -34,7 +35,7 @@ EPDDisplay gfx(EPD_W, EPD_H);
 const char* TZ_STRING  = "EST5EDT,M3.2.0,M11.1.0";   // fallback only, overridden by IP detection
 const char* NTP_SERVER = "pool.ntp.org";
 
-#define NTP_SYNC_INTERVAL_MIN  60  // re-sync NTP every 60 wakeups (~1 hr)
+#define NTP_SYNC_INTERVAL_MIN  3   // re-sync NTP every 15 wakeups (~30 min)
 
 // GPIO for WiFiManager reset (hold at boot to clear saved credentials)
 #define RESET_BUTTON_PIN  0   // BOOT button on most ESP32-S3 boards
@@ -53,6 +54,9 @@ RTC_DATA_ATTR uint32_t totalMinutes   = 0;
 RTC_DATA_ATTR int      lastHour       = -1;
 RTC_DATA_ATTR int      lastMinute     = -1;
 RTC_DATA_ATTR bool     timeEverSynced = false;
+RTC_DATA_ATTR uint32_t lastSyncedWakeups = 0;
+RTC_DATA_ATTR int      lastSyncedMinute  = -1;
+RTC_DATA_ATTR time_t   lastSyncedEpoch   = 0;
 
 // =============================================================================
 // FORWARD DECLARATIONS
@@ -118,6 +122,8 @@ void setup() {
     Serial.println("Syncing NTP...");
     if (doWiFiTimeSync()) {
       timeEverSynced = true;
+      lastSyncedWakeups = totalMinutes;
+      lastSyncedEpoch = time(nullptr);  // epoch is always UTC
     } else {
       Serial.println("NTP sync failed");
     }
@@ -134,7 +140,19 @@ void setup() {
     deepSleepUntilNextMinute(0);
   }
 
-  Serial.printf("Time: %02d:%02d:%02d\n", t.tm_hour, t.tm_min, t.tm_sec);
+  // Calculate current time from elapsed wakeups to avoid drift
+  uint32_t elapsedWakeups = totalMinutes - lastSyncedWakeups;
+  int elapsedMinutes = elapsedWakeups * 60;
+
+  // lastSyncedEpoch is UTC seconds; add elapsed seconds, then apply local TZ
+  time_t currentTime = lastSyncedEpoch + elapsedMinutes;
+  struct tm t_calc = *localtime(&currentTime);
+
+  Serial.printf("Wakeups since last sync: %lu\n", elapsedWakeups);
+  Serial.printf("Calculated local time: %02d:%02d:%02d\n",
+                t_calc.tm_hour, t_calc.tm_min, t_calc.tm_sec);
+
+  t = t_calc;
 
   // Skip if same minute
   if (t.tm_hour == lastHour && t.tm_min == lastMinute) {
@@ -202,19 +220,15 @@ bool doWiFiTimeSync() {
 
   Serial.println("WiFi connected");
 
-  // Detect timezone from IP geolocation
+  // Detect timezone from IP geolocation, fall back to hardcoded default
   String tz = detectTimezone();
-  if (tz.length() > 0) {
-    Serial.printf("Detected TZ: %s\n", tz.c_str());
-    setenv("TZ", tz.c_str(), 1);
-  } else {
-    Serial.println("TZ detection failed, using fallback");
-    setenv("TZ", TZ_STRING, 1);
-  }
+  if (tz.length() == 0) tz = TZ_STRING;
+  setenv("TZ", tz.c_str(), 1);
   tzset();
 
-  // Sync NTP
-  configTime(0, 0, NTP_SERVER);
+  // Sync NTP using the POSIX TZ string directly (handles DST correctly,
+  // unlike configTime's gmtOffset-in-seconds overload)
+  configTzTime(tz.c_str(), NTP_SERVER);
 
   struct tm t;
   for (int i = 0; i < 20; i++) {
@@ -226,6 +240,8 @@ bool doWiFiTimeSync() {
     }
     delay(500);
   }
+
+  Serial.println("NTP sync timed out");
 
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
