@@ -35,7 +35,7 @@ EPDDisplay gfx(EPD_W, EPD_H);
 const char* TZ_STRING  = "EST5EDT,M3.2.0,M11.1.0";   // fallback only, overridden by IP detection
 const char* NTP_SERVER = "pool.ntp.org";
 
-#define NTP_SYNC_INTERVAL_MIN  3   // re-sync NTP every 15 wakeups (~30 min)
+#define NTP_SYNC_INTERVAL_MIN  15  // re-sync NTP every 15 wakeups (~15 min) to correct RC drift
 
 // GPIO for WiFiManager reset (hold at boot to clear saved credentials)
 #define RESET_BUTTON_PIN  0   // BOOT button on most ESP32-S3 boards
@@ -54,9 +54,7 @@ RTC_DATA_ATTR uint32_t totalMinutes   = 0;
 RTC_DATA_ATTR int      lastHour       = -1;
 RTC_DATA_ATTR int      lastMinute     = -1;
 RTC_DATA_ATTR bool     timeEverSynced = false;
-RTC_DATA_ATTR uint32_t lastSyncedWakeups = 0;
-RTC_DATA_ATTR int      lastSyncedMinute  = -1;
-RTC_DATA_ATTR time_t   lastSyncedEpoch   = 0;
+RTC_DATA_ATTR char     cachedTZ[48]   = "";  // detected POSIX TZ, persists across deep sleep
 
 // =============================================================================
 // FORWARD DECLARATIONS
@@ -83,8 +81,10 @@ void setup() {
   delay(3000);
   Serial.println("\n=== WAKE ===");
 
-  // Timezone MUST be set on every boot — does not survive deep sleep
-  setenv("TZ", TZ_STRING, 1);
+  // TZ env var MUST be set on every boot — it does not survive deep sleep.
+  // Use the last-detected zone if we have one, so non-sync wakeups don't
+  // fall back to the hardcoded default and skew local time.
+  setenv("TZ", cachedTZ[0] ? cachedTZ : TZ_STRING, 1);
   tzset();
 
   totalMinutes++;
@@ -98,6 +98,20 @@ void setup() {
     wm.resetSettings();
     Serial.println("Credentials cleared, restarting...");
     ESP.restart();
+  }
+
+  // Read the ESP32 internal RTC — it keeps running through deep sleep, so
+  // this is the real current time (drift-corrected at each NTP sync), not a
+  // wakeup counter that assumes exactly 60s per cycle.
+  struct tm t;
+  bool haveTime = getTime(&t);
+  if (haveTime) {
+    Serial.printf("RTC time: %02d:%02d:%02d\n", t.tm_hour, t.tm_min, t.tm_sec);
+    // Same minute as last render (woke early) — bail out before EPD/WiFi.
+    if (t.tm_hour == lastHour && t.tm_min == lastMinute) {
+      Serial.println("Same minute, skipping");
+      deepSleepUntilNextMinute(t.tm_sec);
+    }
   }
 
   // Power on screen
@@ -115,22 +129,20 @@ void setup() {
   Paint_Clear(WHITE);
   Serial.println("EPD ready");
 
-  // NTP sync
+  // NTP sync — configTzTime() sets the internal RTC, so a successful sync
+  // re-anchors the clock and corrects accumulated RC-oscillator drift.
   bool needSync = !timeEverSynced ||
                   (totalMinutes % NTP_SYNC_INTERVAL_MIN == 0);
   if (needSync) {
     Serial.println("Syncing NTP...");
     if (doWiFiTimeSync()) {
       timeEverSynced = true;
-      lastSyncedWakeups = totalMinutes;
-      lastSyncedEpoch = time(nullptr);  // epoch is always UTC
     } else {
       Serial.println("NTP sync failed");
     }
   }
 
-  // Get time
-  struct tm t;
+  // Re-read the clock after any sync to get the freshest, corrected time.
   if (!getTime(&t)) {
     Serial.println("ERROR: no valid time");
     showMessage("No time sync.", "Check WiFi.");
@@ -139,27 +151,7 @@ void setup() {
     EPD_Sleep();
     deepSleepUntilNextMinute(0);
   }
-
-  // Calculate current time from elapsed wakeups to avoid drift
-  uint32_t elapsedWakeups = totalMinutes - lastSyncedWakeups;
-  int elapsedMinutes = elapsedWakeups * 60;
-
-  // lastSyncedEpoch is UTC seconds; add elapsed seconds, then apply local TZ
-  time_t currentTime = lastSyncedEpoch + elapsedMinutes;
-  struct tm t_calc = *localtime(&currentTime);
-
-  Serial.printf("Wakeups since last sync: %lu\n", elapsedWakeups);
-  Serial.printf("Calculated local time: %02d:%02d:%02d\n",
-                t_calc.tm_hour, t_calc.tm_min, t_calc.tm_sec);
-
-  t = t_calc;
-
-  // Skip if same minute
-  if (t.tm_hour == lastHour && t.tm_min == lastMinute) {
-    Serial.println("Same minute, skipping");
-    EPD_Sleep();
-    deepSleepUntilNextMinute(t.tm_sec);
-  }
+  Serial.printf("Local time: %02d:%02d:%02d\n", t.tm_hour, t.tm_min, t.tm_sec);
 
   lastHour   = t.tm_hour;
   lastMinute = t.tm_min;
@@ -234,6 +226,12 @@ bool doWiFiTimeSync() {
   for (int i = 0; i < 20; i++) {
     if (getLocalTime(&t) && t.tm_year > 100) {
       Serial.printf("NTP OK: %02d:%02d:%02d\n", t.tm_hour, t.tm_min, t.tm_sec);
+
+      // configTzTime() already set the internal RTC to this time. Just cache
+      // the active TZ so non-sync wakeups use the right zone across deep sleep.
+      const char* activeTZ = getenv("TZ");
+      if (activeTZ) strlcpy(cachedTZ, activeTZ, sizeof(cachedTZ));
+
       WiFi.disconnect(true);
       WiFi.mode(WIFI_OFF);
       return true;
