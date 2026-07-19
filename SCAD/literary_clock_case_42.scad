@@ -43,6 +43,7 @@ LIP_H        = 4.0;     // lid lip height
 LIP_T        = 1.5;     // lid lip wall thickness
 PCB_PAD      = 1.0;     // gap around PCB in XY
 BAT_PAD      = 2.0;     // padding above battery
+WING_EXTEND  = 3.0;     // wing protrusion on left/right
 
 // ---- PCB SHELF ----
 SHELF_W      = 4.0;     // shelf protrusion (also = chamfer height for 45°)
@@ -56,7 +57,7 @@ DET_R        = 1.3;
 // ---- DERIVED ----
 INNER_W      = PCB_W + PCB_PAD * 2;
 INNER_H      = PCB_H + PCB_PAD * 2;
-OUTER_W      = INNER_W + WALL * 2;
+OUTER_W      = INNER_W + WALL * 2 + WING_EXTEND * 2;
 OUTER_H      = INNER_H + WALL * 2;
 
 BAT_BAY_H    = BAT_T + BAT_PAD;
@@ -142,7 +143,13 @@ module base() {
     translate([WALL + INNER_W, WALL + INNER_H, PCB_SHELF_Z])
         rotate([0,0,180]) shelf_y(INNER_H);
 
-    // Battery retaining lips removed — battery held by recess fit
+    // Left wing (above shelf)
+    translate([0, WALL, PCB_SHELF_Z])
+        cube([WALL + WING_EXTEND, INNER_H, LIP_H]);
+
+    // Right wing (above shelf)
+    translate([WALL + INNER_W, WALL, PCB_SHELF_Z])
+        cube([WALL + WING_EXTEND, INNER_H, LIP_H]);
 }
 
 // =============================================================================
