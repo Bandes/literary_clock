@@ -1,8 +1,9 @@
 // =============================================================================
 // Literary Clock — Elecrow CrowPanel 4.2" ESP32-S3
 // =============================================================================
-// Data file format (LittleFS, /HH.txt, one line per minute):
-//   Quote text|Author|Book Title
+// Data file format (LittleFS, /HH.txt, one or more lines per minute):
+//   MM|Quote text|Author|Book Title
+// Multiple lines may share the same MM; one is chosen at random per wake.
 // =============================================================================
 
 #include <Arduino.h>
@@ -14,7 +15,9 @@ uint8_t ImageBW[EPD_W * EPD_H / 8];  // 400x300/8 = 15000 bytes
 #include <HTTPClient.h>
 #include "time.h"
 #include "LittleFS.h"
+#include "esp_random.h"
 #include <cstring>
+#include <vector>
 
 #include <Adafruit_GFX.h>
 #include <Fonts/FreeSerif9pt7b.h>
@@ -353,25 +356,36 @@ String getQuote(int hour, int minute) {
     Serial.printf("File not found: %s\n", filename.c_str());
     return "Time is a river without banks.|Marc Chagall|";
   }
-  String line;
-  int n = 0;
+
+  // Collect every quote tagged with this minute (format: MM|Quote|Author|Book).
+  std::vector<String> cands;
   while (file.available()) {
-    line = file.readStringUntil('\n');
+    String line = file.readStringUntil('\n');
     line.trim();
-    // Clean up HTML line breaks from the JohannesNE dataset
-    line.replace("<br />", " ");
-    line.replace("<br/>", " ");
-    line.replace("<br>", " ");
-    // Collapse double spaces that result from replacements
-    while (line.indexOf("  ") >= 0) line.replace("  ", " ");
-    if (n == minute) {
-      file.close();
-      return line;
+    if (line.length() == 0) continue;
+    int bar = line.indexOf('|');
+    if (bar < 0) continue;
+    if (line.substring(0, bar).toInt() == minute) {
+      cands.push_back(line.substring(bar + 1));
     }
-    n++;
   }
   file.close();
-  return "All we have to decide is what to do with the time given us.|Tolkien|Fellowship of the Ring";
+
+  if (cands.empty()) {
+    // A handful of minutes have no quote in the dataset — graceful fallback.
+    return "All we have to decide is what to do with the time given us.|Tolkien|Fellowship of the Ring";
+  }
+
+  // Pick one at random so repeated minutes vary day to day.
+  String chosen = cands[esp_random() % cands.size()];
+  Serial.printf("Minute %d: %d candidate(s)\n", minute, (int)cands.size());
+
+  // Data is pre-sanitized at build time; this is just a safety net.
+  chosen.replace("<br />", " ");
+  chosen.replace("<br/>", " ");
+  chosen.replace("<br>", " ");
+  while (chosen.indexOf("  ") >= 0) chosen.replace("  ", " ");
+  return chosen;
 }
 
 // =============================================================================
