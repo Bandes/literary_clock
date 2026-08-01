@@ -36,9 +36,11 @@ EPDDisplay gfx(EPD_W, EPD_H);
 // To reset credentials: hold BOOT button for 3 seconds at startup.
 // TZ_STRING is used as fallback if IP geolocation fails.
 const char* TZ_STRING  = "EST5EDT,M3.2.0,M11.1.0";   // fallback only, overridden by IP detection
-const char* NTP_SERVER = "pool.ntp.org";
+const char* NTP_SERVERS[] = {"pool.ntp.org", "time.google.com", "time.nist.gov"};
+#define NUM_NTP_SERVERS (sizeof(NTP_SERVERS) / sizeof(NTP_SERVERS[0]))
 
-#define NTP_SYNC_INTERVAL_MIN  15  // re-sync NTP every 15 wakeups (~15 min) to correct RC drift
+#define WIFI_CONNECT_TIMEOUT_S  10  // fast connect — no captive portal on wake
+#define NTP_POLL_ATTEMPTS      3    // SNTP poll attempts per wake
 
 // GPIO for WiFiManager reset (hold at boot to clear saved credentials)
 #define RESET_BUTTON_PIN  0   // BOOT button on most ESP32-S3 boards
@@ -62,7 +64,8 @@ RTC_DATA_ATTR char     cachedTZ[48]   = "";  // detected POSIX TZ, persists acro
 // =============================================================================
 // FORWARD DECLARATIONS
 // =============================================================================
-bool   doWiFiTimeSync();
+bool   connectWiFi();
+bool   fastSNTPSync(struct tm* t);
 bool   getTime(struct tm* t);
 void   deepSleepUntilNextMinute(int currentSec);
 String getQuote(int hour, int minute);
@@ -132,17 +135,21 @@ void setup() {
   Paint_Clear(WHITE);
   Serial.println("EPD ready");
 
-  // NTP sync — configTzTime() sets the internal RTC, so a successful sync
-  // re-anchors the clock and corrects accumulated RC-oscillator drift.
-  bool needSync = !timeEverSynced ||
-                  (totalMinutes % NTP_SYNC_INTERVAL_MIN == 0);
-  if (needSync) {
-    Serial.println("Syncing NTP...");
-    if (doWiFiTimeSync()) {
+  // SNTP sync on every wake to correct RC drift. Only use WiFiManager when no
+  // credentials are saved yet or when explicitly reset via BOOT button (above).
+  bool connected = connectWiFi();
+  if (connected) {
+    Serial.println("Syncing SNTP...");
+    if (fastSNTPSync(&t)) {
       timeEverSynced = true;
+      Serial.printf("SNTP synced: %02d:%02d:%02d\n", t.tm_hour, t.tm_min, t.tm_sec);
     } else {
-      Serial.println("NTP sync failed");
+      Serial.println("SNTP sync failed, using RTC");
     }
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+  } else {
+    Serial.println("WiFi connect failed, using RTC");
   }
 
   // Re-read the clock after any sync to get the freshest, corrected time.
@@ -197,15 +204,30 @@ void loop() {}
 // =============================================================================
 // WIFI & NTP
 // =============================================================================
-bool doWiFiTimeSync() {
-  // WiFiManager handles credentials — shows captive portal on first boot
-  // or if credentials have been reset. Subsequent boots connect automatically.
+bool connectWiFi() {
+  WiFi.mode(WIFI_STA);
+
+  // Stored credentials from a previous WiFiManager run — fast reconnect,
+  // no portal, so most wakeups don't pay a captive-portal timeout.
+  if (WiFi.SSID().length() > 0) {
+    WiFi.begin();
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED &&
+           millis() - start < WIFI_CONNECT_TIMEOUT_S * 1000UL) {
+      delay(100);
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("WiFi connected (fast)");
+      return true;
+    }
+    Serial.println("Fast WiFi connect timed out, trying portal");
+  }
+
+  // No stored credentials, or fast connect failed — fall back to the
+  // WiFiManager captive portal.
   WiFiManager wm;
-  wm.setConnectTimeout(30);   // seconds to try connecting before portal
-  wm.setTimeout(180);         // seconds portal stays open before giving up
-
-  // Portal callback removed — lambda with EPD calls caused boot crash on ESP32-S3
-
+  wm.setConnectTimeout(WIFI_CONNECT_TIMEOUT_S);
+  wm.setTimeout(180);  // seconds portal stays open before giving up
   if (!wm.autoConnect("LiteraryClock")) {
     Serial.println("WiFiManager failed / timed out");
     WiFi.disconnect(true);
@@ -213,39 +235,30 @@ bool doWiFiTimeSync() {
     return false;
   }
 
-  Serial.println("WiFi connected");
+  Serial.println("WiFi connected (portal)");
+  return true;
+}
 
-  // Detect timezone from IP geolocation, fall back to hardcoded default
-  String tz = detectTimezone();
-  if (tz.length() == 0) tz = TZ_STRING;
-  setenv("TZ", tz.c_str(), 1);
+bool fastSNTPSync(struct tm* t) {
+  // Detect timezone once from IP geolocation and cache it across deep sleep;
+  // every later wake reuses cachedTZ instead of re-querying.
+  if (!cachedTZ[0]) {
+    String tz = detectTimezone();
+    if (tz.length() == 0) tz = TZ_STRING;
+    strlcpy(cachedTZ, tz.c_str(), sizeof(cachedTZ));
+  }
+  setenv("TZ", cachedTZ, 1);
   tzset();
 
-  // Sync NTP using the POSIX TZ string directly (handles DST correctly,
-  // unlike configTime's gmtOffset-in-seconds overload)
-  configTzTime(tz.c_str(), NTP_SERVER);
+  // configTzTime() with the POSIX TZ string handles DST correctly and
+  // re-anchors the internal RTC on success, correcting RC-oscillator drift.
+  configTzTime(cachedTZ, NTP_SERVERS[0], NTP_SERVERS[1], NTP_SERVERS[2]);
 
-  struct tm t;
-  for (int i = 0; i < 20; i++) {
-    if (getLocalTime(&t) && t.tm_year > 100) {
-      Serial.printf("NTP OK: %02d:%02d:%02d\n", t.tm_hour, t.tm_min, t.tm_sec);
-
-      // configTzTime() already set the internal RTC to this time. Just cache
-      // the active TZ so non-sync wakeups use the right zone across deep sleep.
-      const char* activeTZ = getenv("TZ");
-      if (activeTZ) strlcpy(cachedTZ, activeTZ, sizeof(cachedTZ));
-
-      WiFi.disconnect(true);
-      WiFi.mode(WIFI_OFF);
+  for (int i = 0; i < NTP_POLL_ATTEMPTS; i++) {
+    if (getLocalTime(t, 2000) && t->tm_year > 100) {
       return true;
     }
-    delay(500);
   }
-
-  Serial.println("NTP sync timed out");
-
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
   return false;
 }
 
