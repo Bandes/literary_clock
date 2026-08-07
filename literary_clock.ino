@@ -41,6 +41,7 @@ const char* NTP_SERVERS[] = {"pool.ntp.org", "time.google.com", "time.nist.gov"}
 
 #define WIFI_CONNECT_TIMEOUT_S  10  // fast connect — no captive portal on wake
 #define NTP_POLL_ATTEMPTS      3    // SNTP poll attempts per wake
+#define NTP_SYNC_INTERVAL_S   (15 * 60)  // force a resync at least this often, regardless of wake cadence
 
 // GPIO for WiFiManager reset (hold at boot to clear saved credentials)
 #define RESET_BUTTON_PIN  0   // BOOT button on most ESP32-S3 boards
@@ -60,6 +61,7 @@ RTC_DATA_ATTR int      lastHour       = -1;
 RTC_DATA_ATTR int      lastMinute     = -1;
 RTC_DATA_ATTR bool     timeEverSynced = false;
 RTC_DATA_ATTR char     cachedTZ[48]   = "";  // detected POSIX TZ, persists across deep sleep
+RTC_DATA_ATTR time_t   lastSyncEpoch  = 0;   // time() at last successful SNTP sync
 
 // =============================================================================
 // FORWARD DECLARATIONS
@@ -111,10 +113,13 @@ void setup() {
   // wakeup counter that assumes exactly 60s per cycle.
   struct tm t;
   bool haveTime = getTime(&t);
+  bool syncDue = (time(nullptr) - lastSyncEpoch) >= NTP_SYNC_INTERVAL_S;
   if (haveTime) {
     Serial.printf("RTC time: %02d:%02d:%02d\n", t.tm_hour, t.tm_min, t.tm_sec);
-    // Same minute as last render (woke early) — bail out before EPD/WiFi.
-    if (t.tm_hour == lastHour && t.tm_min == lastMinute) {
+    // Same minute as last render (woke early) — bail out before EPD/WiFi,
+    // unless we haven't synced in a while: a resync must not depend on
+    // how often the device happens to wake.
+    if (t.tm_hour == lastHour && t.tm_min == lastMinute && !syncDue) {
       Serial.println("Same minute, skipping");
       deepSleepUntilNextMinute(t.tm_sec);
     }
@@ -142,6 +147,7 @@ void setup() {
     Serial.println("Syncing SNTP...");
     if (fastSNTPSync(&t)) {
       timeEverSynced = true;
+      lastSyncEpoch = time(nullptr);
       Serial.printf("SNTP synced: %02d:%02d:%02d\n", t.tm_hour, t.tm_min, t.tm_sec);
     } else {
       Serial.println("SNTP sync failed, using RTC");
