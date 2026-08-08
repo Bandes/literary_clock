@@ -67,7 +67,7 @@ RTC_DATA_ATTR time_t   lastSyncEpoch  = 0;   // time() at last successful SNTP s
 // FORWARD DECLARATIONS
 // =============================================================================
 bool   connectWiFi();
-bool   fastSNTPSync(struct tm* t);
+bool   fastSNTPSync(struct tm* t, bool forceFullSync = false);
 bool   getTime(struct tm* t);
 void   deepSleepUntilNextMinute(int currentSec);
 String getQuote(int hour, int minute);
@@ -145,7 +145,8 @@ void setup() {
   bool connected = connectWiFi();
   if (connected) {
     Serial.println("Syncing SNTP...");
-    if (fastSNTPSync(&t)) {
+    // Force full resync every NTP_SYNC_INTERVAL_S to combat drift
+    if (fastSNTPSync(&t, syncDue)) {
       timeEverSynced = true;
       lastSyncEpoch = time(nullptr);
       Serial.printf("SNTP synced: %02d:%02d:%02d\n", t.tm_hour, t.tm_min, t.tm_sec);
@@ -245,7 +246,7 @@ bool connectWiFi() {
   return true;
 }
 
-bool fastSNTPSync(struct tm* t) {
+bool fastSNTPSync(struct tm* t, bool forceFullSync) {
   // Detect timezone once from IP geolocation and cache it across deep sleep;
   // every later wake reuses cachedTZ instead of re-querying.
   if (!cachedTZ[0]) {
@@ -260,10 +261,26 @@ bool fastSNTPSync(struct tm* t) {
   // re-anchors the internal RTC on success, correcting RC-oscillator drift.
   configTzTime(cachedTZ, NTP_SERVERS[0], NTP_SERVERS[1], NTP_SERVERS[2]);
 
-  for (int i = 0; i < NTP_POLL_ATTEMPTS; i++) {
-    if (getLocalTime(t, 2000) && t->tm_year > 100) {
+  // Force a fresh sync if requested: set time to 0 to invalidate cache
+  if (forceFullSync) {
+    Serial.println("Forcing full NTP resync...");
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
+    settimeofday(&tv, nullptr);
+    // Give SNTP a moment to queue the request
+    delay(100);
+  }
+
+  // Aggressive polling for sync with longer timeout on forced syncs
+  int attempts = forceFullSync ? 5 : NTP_POLL_ATTEMPTS;
+  unsigned long timeout = forceFullSync ? 5000UL : 2000UL;
+  
+  for (int i = 0; i < attempts; i++) {
+    if (getLocalTime(t, timeout) && t->tm_year > 100) {
       return true;
     }
+    delay(100);  // Small gap between attempts
   }
   return false;
 }
