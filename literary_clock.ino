@@ -143,13 +143,16 @@ void setup() {
   // SNTP sync on every wake to correct RC drift. Only use WiFiManager when no
   // credentials are saved yet or when explicitly reset via BOOT button (above).
   bool connected = connectWiFi();
-  if (connected) {
+if (connected) {
     Serial.println("Syncing SNTP...");
     // Force full resync every NTP_SYNC_INTERVAL_S to combat drift
     if (fastSNTPSync(&t, syncDue)) {
       timeEverSynced = true;
-      lastSyncEpoch = time(nullptr);
-      Serial.printf("SNTP synced: %02d:%02d:%02d\n", t.tm_hour, t.tm_min, t.tm_sec);
+      if (syncDue) { 
+        lastSyncEpoch = time(nullptr); // Only update on a verified full sync
+        Serial.println("Full NTP sync completed.");
+      }
+      Serial.printf("Time: %02d:%02d:%02d\n", t.tm_hour, t.tm_min, t.tm_sec);
     } else {
       Serial.println("SNTP sync failed, using RTC");
     }
@@ -203,6 +206,9 @@ void setup() {
   EPD_Sleep();
   Serial.println("Display updated");
 
+  // Re-read the time so our sleep math accounts for how long 
+  // the E-ink update just took.
+  getTime(&t);
   deepSleepUntilNextMinute(t.tm_sec);
 }
 
